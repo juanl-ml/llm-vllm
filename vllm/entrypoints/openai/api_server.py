@@ -256,7 +256,7 @@ async def build_async_engine_client_from_engine_args(
 router = APIRouter()
 
 
-def mount_metrics(app: FastAPI):
+def mount_metrics(app: FastAPI, prefix: str):
     # Lazy import for prometheus multiprocessing.
     # We need to set PROMETHEUS_MULTIPROC_DIR environment variable
     # before prometheus_client is imported.
@@ -272,13 +272,14 @@ def mount_metrics(app: FastAPI):
         multiprocess.MultiProcessCollector(registry)
 
         # Add prometheus asgi middleware to route /metrics requests
-        metrics_route = Mount("/metrics", make_asgi_app(registry=registry))
+        metrics_route = Mount(f"{prefix}/metrics",
+                              make_asgi_app(registry=registry))
     else:
         # Add prometheus asgi middleware to route /metrics requests
-        metrics_route = Mount("/metrics", make_asgi_app())
+        metrics_route = Mount(f"{prefix}/metrics", make_asgi_app())
 
     # Workaround for 307 Redirect for /metrics
-    metrics_route.path_regex = re.compile("^/metrics(?P<path>.*)$")
+    metrics_route.path_regex = re.compile(f"^{prefix}/metrics(?P<path>.*)$")
     app.routes.append(metrics_route)
 
 
@@ -657,17 +658,21 @@ if envs.VLLM_ALLOW_RUNTIME_LORA_UPDATING:
 
 
 def build_app(args: Namespace) -> FastAPI:
+    prefix = args.root_path
     if args.disable_fastapi_docs:
         app = FastAPI(openapi_url=None,
                       docs_url=None,
                       redoc_url=None,
                       lifespan=lifespan)
     else:
-        app = FastAPI(lifespan=lifespan)
-    app.include_router(router)
-    app.root_path = args.root_path
+        app = FastAPI(lifespan=lifespan,
+                      docs_url=f"{prefix}/docs",
+                      redoc_url=f"{prefix}/redoc",
+                      openapi_url=f"{prefix}/openapi.json",)
+    app.include_router(router, prefix=prefix)
+    # app.root_path = args.root_path
 
-    mount_metrics(app)
+    mount_metrics(app=app, prefix=prefix)
 
     app.add_middleware(
         CORSMiddleware,
@@ -694,7 +699,7 @@ def build_app(args: Namespace) -> FastAPI:
             url_path = request.url.path
             if app.root_path and url_path.startswith(app.root_path):
                 url_path = url_path[len(app.root_path):]
-            if not url_path.startswith("/v1"):
+            if not url_path.startswith(f"{prefix}/v1"):
                 return await call_next(request)
             if request.headers.get("Authorization") != "Bearer " + token:
                 return JSONResponse(content={"error": "Unauthorized"},
@@ -845,13 +850,13 @@ async def run_server(args, **uvicorn_kwargs) -> None:
 
     valid_tool_parses = ToolParserManager.tool_parsers.keys()
     if args.enable_auto_tool_choice \
-        and args.tool_call_parser not in valid_tool_parses:
+            and args.tool_call_parser not in valid_tool_parses:
         raise KeyError(f"invalid tool call parser: {args.tool_call_parser} "
                        f"(chose from {{ {','.join(valid_tool_parses)} }})")
 
     valid_reasoning_parses = ReasoningParserManager.reasoning_parsers.keys()
     if args.enable_reasoning \
-        and args.reasoning_parser not in valid_reasoning_parses:
+            and args.reasoning_parser not in valid_reasoning_parses:
         raise KeyError(
             f"invalid reasoning parser: {args.reasoning_parser} "
             f"(chose from {{ {','.join(valid_reasoning_parses)} }})")
